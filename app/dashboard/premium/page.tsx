@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Check, Zap, Crown, Star, Loader2 } from "lucide-react";
+import { Check, Zap, Crown, Star, Loader2, CheckCircle, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { createClient } from "@/lib/supabase/client";
 
 const plans = [
   {
@@ -36,8 +37,50 @@ const plans = [
   },
 ];
 
+interface Subscription {
+  id: string;
+  plan: string;
+  price: number;
+  payment_status: string;
+  starts_at: string;
+  ends_at: string;
+}
+
 export default function PremiumPage() {
   const [loading, setLoading] = useState<string | null>(null);
+  const [checkingSubscription, setCheckingSubscription] = useState(true);
+  const [activeSubscription, setActiveSubscription] = useState<Subscription | null>(null);
+  const supabase = createClient();
+
+  useEffect(() => {
+    checkSubscription();
+  }, []);
+
+  const checkSubscription = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Check for active subscription
+      const { data: subscription } = await supabase
+        .from("subscriptions")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("payment_status", "paid")
+        .gte("ends_at", new Date().toISOString())
+        .order("ends_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (subscription) {
+        setActiveSubscription(subscription);
+      }
+    } catch (err) {
+      console.error("Check subscription error:", err);
+    } finally {
+      setCheckingSubscription(false);
+    }
+  };
 
   const handlePurchase = async (planId: string) => {
     setLoading(planId);
@@ -52,7 +95,7 @@ export default function PremiumPage() {
       const data = await response.json();
 
       if (data.redirect_url) {
-        // Redirect to Midtrans payment page
+        // Redirect to payment page (or mock page in dev)
         window.location.href = data.redirect_url;
       } else if (data.token) {
         // Use Snap.js (if loaded)
@@ -72,6 +115,127 @@ export default function PremiumPage() {
     }
   };
 
+  const getPlanName = (planId: string) => {
+    return plans.find(p => p.id === planId)?.name || planId;
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+  };
+
+  const getDaysRemaining = (endDate: string) => {
+    const end = new Date(endDate);
+    const now = new Date();
+    const diff = Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    return diff;
+  };
+
+  if (checkingSubscription) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  // Show active subscription
+  if (activeSubscription) {
+    const daysRemaining = getDaysRemaining(activeSubscription.ends_at);
+    
+    return (
+      <div className="max-w-2xl mx-auto pb-20 md:pb-0">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <Card className="border-primary">
+            <CardHeader className="text-center">
+              <div className="w-16 h-16 rounded-full bg-green-500/20 mx-auto mb-4 flex items-center justify-center">
+                <CheckCircle className="h-8 w-8 text-green-500" />
+              </div>
+              <CardTitle className="text-2xl text-green-600">Premium Aktif!</CardTitle>
+              <CardDescription>
+                Anda sedang berlangganan paket {getPlanName(activeSubscription.plan)}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Status Cards */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="p-4 rounded-lg bg-muted text-center">
+                  <Zap className="h-8 w-8 text-primary mx-auto mb-2" />
+                  <p className="text-2xl font-bold">Unlimited</p>
+                  <p className="text-sm text-muted-foreground">Energi</p>
+                </div>
+                <div className="p-4 rounded-lg bg-muted text-center">
+                  <Calendar className="h-8 w-8 text-primary mx-auto mb-2" />
+                  <p className="text-2xl font-bold">{daysRemaining}</p>
+                  <p className="text-sm text-muted-foreground">Hari Tersisa</p>
+                </div>
+              </div>
+
+              {/* Details */}
+              <div className="p-4 rounded-lg bg-primary/5 border border-primary/20 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Paket</span>
+                  <span className="font-medium">{getPlanName(activeSubscription.plan)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Harga</span>
+                  <span className="font-medium">Rp {activeSubscription.price.toLocaleString("id-ID")}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Mulai</span>
+                  <span className="font-medium">{formatDate(activeSubscription.starts_at)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Berakhir</span>
+                  <span className="font-medium">{formatDate(activeSubscription.ends_at)}</span>
+                </div>
+              </div>
+
+              {/* Benefits */}
+              <div>
+                <h3 className="font-semibold mb-3">Keuntungan Premium:</h3>
+                <ul className="space-y-2">
+                  {[
+                    "Energi unlimited tanpa batas",
+                    "Akses semua fitur latihan",
+                    "Tidak ada iklan",
+                    "Prioritas support"
+                  ].map((benefit, i) => (
+                    <li key={i} className="flex items-center gap-2 text-sm">
+                      <Check className="h-4 w-4 text-green-500" />
+                      <span>{benefit}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </CardContent>
+            <CardFooter className="flex-col gap-3">
+              {daysRemaining <= 7 && (
+                <p className="text-sm text-yellow-600 text-center">
+                  ⚠️ Langganan Anda akan berakhir dalam {daysRemaining} hari
+                </p>
+              )}
+              <Button 
+                variant="outline" 
+                className="w-full"
+                onClick={() => setActiveSubscription(null)}
+              >
+                Lihat Paket Lainnya
+              </Button>
+            </CardFooter>
+          </Card>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // Show pricing plans
   return (
     <div className="max-w-5xl mx-auto pb-20 md:pb-0">
       <div className="text-center mb-10">

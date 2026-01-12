@@ -55,6 +55,18 @@ export default async function DashboardLayout({
     .eq("user_id", user.id)
     .single();
 
+  // Check for active subscription (premium)
+  const { data: subscription } = await supabase
+    .from("subscriptions")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("payment_status", "paid")
+    .gte("ends_at", new Date().toISOString())
+    .limit(1)
+    .single();
+
+  const isPremium = !!subscription;
+
   return (
     <div className="min-h-screen bg-background">
       {/* Top Navigation */}
@@ -65,13 +77,19 @@ export default async function DashboardLayout({
           </Link>
 
           <div className="flex items-center gap-4">
-            {/* Energy Display */}
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10">
-              <Zap className="h-4 w-4 text-primary" />
-              <span className="text-sm font-medium">
-                {energy?.current_energy ?? 5} Energi
-              </span>
-            </div>
+            {/* Energy Display - Click to go to Premium */}
+            <Link href="/dashboard/premium">
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-colors cursor-pointer ${
+                isPremium 
+                  ? "bg-gradient-to-r from-yellow-500/20 to-orange-500/20 hover:from-yellow-500/30 hover:to-orange-500/30 border border-yellow-500/30" 
+                  : "bg-primary/10 hover:bg-primary/20"
+              }`}>
+                <Zap className={`h-4 w-4 ${isPremium ? "text-yellow-500" : "text-primary"}`} />
+                <span className={`text-sm font-medium ${isPremium ? "text-yellow-600" : ""}`}>
+                  {isPremium ? "∞ Unlimited" : `${energy?.current_energy ?? 5} Energi`}
+                </span>
+              </div>
+            </Link>
 
             {/* User Menu */}
             <div className="flex items-center gap-2">

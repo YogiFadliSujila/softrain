@@ -194,9 +194,12 @@ CREATE POLICY "Users can update own energy" ON public.user_energies FOR UPDATE U
 
 -- Subscriptions: Only own data
 CREATE POLICY "Users can view own subscriptions" ON public.subscriptions FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert own subscriptions" ON public.subscriptions FOR INSERT WITH CHECK (auth.uid() = user_id);
 
--- Rankings: Public read
+-- Rankings: Public read, users can manage own
 CREATE POLICY "Rankings are public" ON public.user_rankings FOR SELECT USING (true);
+CREATE POLICY "Users can insert own rankings" ON public.user_rankings FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update own rankings" ON public.user_rankings FOR UPDATE USING (auth.uid() = user_id);
 
 -- Challenge Attempts: Only own data
 CREATE POLICY "Users can view own attempts" ON public.challenge_attempts FOR SELECT USING (auth.uid() = user_id);

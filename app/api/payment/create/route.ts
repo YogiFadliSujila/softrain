@@ -68,12 +68,26 @@ export async function POST(request: NextRequest) {
 
     // Check if server key is configured
     if (!process.env.MIDTRANS_SERVER_KEY) {
-      // Return mock token for development
+      // Save subscription record for mock mode
+      const startsAt = new Date();
+      const endsAt = new Date(startsAt.getTime() + selectedPlan.duration_days * 24 * 60 * 60 * 1000);
+
+      await supabase.from("subscriptions").insert({
+        user_id: user.id,
+        plan,
+        price: selectedPlan.price,
+        payment_id: orderId,
+        payment_status: "pending",
+        starts_at: startsAt.toISOString(),
+        ends_at: endsAt.toISOString(),
+      });
+
+      // Return mock redirect for development
       return NextResponse.json({
         token: "mock-token-" + orderId,
-        redirect_url: "/dashboard/premium/mock",
+        redirect_url: `/dashboard/premium/mock?order_id=${orderId}`,
         order_id: orderId,
-        message: "Midtrans belum dikonfigurasi. Ini adalah mode development.",
+        message: "Midtrans belum dikonfigurasi. Menggunakan mode development.",
       });
     }
 

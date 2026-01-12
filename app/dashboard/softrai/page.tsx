@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { motion, AnimatePresence } from "framer-motion";
-import { Bot, Send, Loader2, Plus, Trash2 } from "lucide-react";
+import { Bot, Send, Loader2, Plus, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +18,7 @@ interface ChatSession {
   id: string;
   title: string;
   created_at: string;
+  messages_count: number;
 }
 
 export default function SoftrAIPage() {
@@ -26,43 +27,60 @@ export default function SoftrAIPage() {
   const [loading, setLoading] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [loadingSession, setLoadingSession] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const supabase = createClient();
 
   // Load sessions on mount
+  const loadSessions = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from("chat_sessions")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(20);
+
+    if (error) {
+      console.error("Load sessions error:", error);
+      return;
+    }
+
+    if (data) {
+      setSessions(data);
+      // Auto-load most recent session if no current session
+      if (data.length > 0 && !currentSessionId) {
+        loadSession(data[0].id);
+      }
+    }
+  }, [supabase, currentSessionId]);
+
   useEffect(() => {
     loadSessions();
-  }, []);
+  }, [loadSessions]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const loadSessions = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { data } = await supabase
-      .from("chat_sessions")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("updated_at", { ascending: false })
-      .limit(10);
-
-    if (data) {
-      setSessions(data);
-    }
-  };
-
   const loadSession = async (sessionId: string) => {
+    setLoadingSession(true);
     setCurrentSessionId(sessionId);
     
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("chat_messages")
       .select("*")
       .eq("session_id", sessionId)
       .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("Load messages error:", error);
+      setLoadingSession(false);
+      return;
+    }
 
     if (data) {
       setMessages(data.map(m => ({
@@ -71,26 +89,13 @@ export default function SoftrAIPage() {
         content: m.content,
       })));
     }
+    setLoadingSession(false);
   };
 
-  const createNewSession = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { data } = await supabase
-      .from("chat_sessions")
-      .insert({
-        user_id: user.id,
-        title: "Sesi Baru",
-      })
-      .select()
-      .single();
-
-    if (data) {
-      setCurrentSessionId(data.id);
-      setMessages([]);
-      await loadSessions();
-    }
+  const createNewSession = () => {
+    // Clear current state - session will be created on first message
+    setCurrentSessionId(null);
+    setMessages([]);
   };
 
   const sendMessage = async (e: React.FormEvent) => {
@@ -100,12 +105,7 @@ export default function SoftrAIPage() {
     const userMessage = input.trim();
     setInput("");
     
-    // Create session if none exists
-    if (!currentSessionId) {
-      await createNewSession();
-    }
-
-    // Add user message to UI
+    // Add user message to UI immediately
     const userMsgId = Date.now().toString();
     setMessages(prev => [...prev, {
       id: userMsgId,
@@ -121,11 +121,18 @@ export default function SoftrAIPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: userMessage,
-          sessionId: currentSessionId,
+          sessionId: currentSessionId, // Can be null - API will create session
         }),
       });
 
       const data = await response.json();
+      
+      // Update session ID if returned (for new sessions)
+      if (data.sessionId && data.sessionId !== currentSessionId) {
+        setCurrentSessionId(data.sessionId);
+        // Reload sessions list to show new session
+        loadSessions();
+      }
       
       // Add AI response to UI
       setMessages(prev => [...prev, {
@@ -134,15 +141,8 @@ export default function SoftrAIPage() {
         content: data.response || "Maaf, terjadi kesalahan.",
       }]);
 
-      // Update session title if first message
-      if (messages.length === 0 && currentSessionId) {
-        await supabase
-          .from("chat_sessions")
-          .update({ title: userMessage.slice(0, 50) })
-          .eq("id", currentSessionId);
-        await loadSessions();
-      }
-    } catch {
+    } catch (err) {
+      console.error("Send message error:", err);
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: "assistant",
@@ -168,11 +168,17 @@ export default function SoftrAIPage() {
             <button
               key={session.id}
               onClick={() => loadSession(session.id)}
-              className={`w-full text-left p-2 rounded-lg text-sm truncate hover:bg-accent transition-colors ${
+              className={`w-full text-left p-2 rounded-lg text-sm hover:bg-accent transition-colors ${
                 currentSessionId === session.id ? "bg-accent" : ""
               }`}
             >
-              {session.title}
+              <div className="flex items-center gap-2">
+                <MessageCircle className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate flex-1">{session.title}</span>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                {session.messages_count || 0} pesan
+              </span>
             </button>
           ))}
           {sessions.length === 0 && (
@@ -190,13 +196,17 @@ export default function SoftrAIPage() {
             </div>
             <div>
               <CardTitle className="text-lg">SoftrAI</CardTitle>
-              <p className="text-xs text-muted-foreground">Asisten Pengembangan Diri</p>
+              <p className="text-xs text-muted-foreground">Powered by Groq • Asisten Pengembangan Diri</p>
             </div>
           </div>
         </CardHeader>
         
         <CardContent className="flex-1 overflow-y-auto p-4 space-y-4">
-          {messages.length === 0 ? (
+          {loadingSession ? (
+            <div className="h-full flex items-center justify-center">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-4">
               <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
                 <Bot className="h-8 w-8 text-primary" />

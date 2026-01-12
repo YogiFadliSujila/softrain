@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import Groq from "groq-sdk";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
@@ -13,7 +13,8 @@ Panduan:
 - Berikan respons yang empatik dan mendukung
 - Jika ditanya hal di luar topik pengembangan diri, arahkan kembali dengan lembut
 - Berikan contoh konkret dan actionable tips
-- Tanyakan pertanyaan follow-up untuk memahami situasi pengguna lebih baik`;
+- Tanyakan pertanyaan follow-up untuk memahami situasi pengguna lebih baik
+- Respons maksimal 3 paragraf`;
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,87 +32,124 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if API key exists
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ 
-        error: "Gemini API key not configured",
-        response: "Maaf, SoftrAI belum dikonfigurasi. Silakan hubungi administrator untuk mengaktifkan fitur ini."
+        error: "Groq API key not configured",
+        response: "Maaf, SoftrAI belum dikonfigurasi. Tambahkan GROQ_API_KEY di .env.local"
       }, { status: 200 });
     }
 
-    // Get chat history from session (optional, skip if no session)
-    let history: { role: string; content: string }[] = [];
-    if (sessionId) {
-      try {
-        const { data: messages } = await supabase
-          .from("chat_messages")
-          .select("role, content")
-          .eq("session_id", sessionId)
-          .order("created_at", { ascending: true })
-          .limit(20);
-        
-        if (messages) {
-          history = messages;
-        }
-      } catch {
-        // Ignore database errors, proceed without history
+    // Ensure session exists - create if not provided
+    let activeSessionId = sessionId;
+    if (!activeSessionId) {
+      const { data: newSession, error: sessionError } = await supabase
+        .from("chat_sessions")
+        .insert({
+          user_id: user.id,
+          title: message.slice(0, 50),
+        })
+        .select()
+        .single();
+      
+      if (sessionError) {
+        console.error("Session creation error:", sessionError);
+        return NextResponse.json({ 
+          error: "Failed to create session",
+          response: "Maaf, gagal membuat sesi chat baru."
+        }, { status: 200 });
+      }
+      
+      activeSessionId = newSession.id;
+    }
+
+    // Load chat history from database
+    const { data: historyMessages, error: historyError } = await supabase
+      .from("chat_messages")
+      .select("role, content")
+      .eq("session_id", activeSessionId)
+      .order("created_at", { ascending: true })
+      .limit(20);
+    
+    if (historyError) {
+      console.error("History load error:", historyError);
+    }
+
+    // Build messages array for Groq
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: SYSTEM_PROMPT }
+    ];
+
+    // Add history
+    if (historyMessages && historyMessages.length > 0) {
+      for (const msg of historyMessages) {
+        messages.push({
+          role: msg.role === "user" ? "user" : "assistant",
+          content: msg.content
+        });
       }
     }
 
-    // Initialize Gemini
-    const ai = new GoogleGenAI({ apiKey });
-    
-    // Build conversation context
-    const conversationHistory = history.map(msg => 
-      `${msg.role === "user" ? "User" : "SoftrAI"}: ${msg.content}`
-    ).join("\n");
+    // Add current message
+    messages.push({ role: "user", content: message });
 
-    const fullPrompt = `${SYSTEM_PROMPT}
+    // Initialize Groq
+    const groq = new Groq({ apiKey });
 
-${conversationHistory ? `Riwayat percakapan:\n${conversationHistory}\n\n` : ""}User: ${message}
-
-SoftrAI:`;
-
-    // Generate response using the correct API
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: fullPrompt,
+    // Generate response
+    const completion = await groq.chat.completions.create({
+      messages,
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.7,
+      max_tokens: 500,
     });
 
-    const aiResponse = response.text?.trim() || "Maaf, saya tidak bisa merespons saat ini.";
+    const aiResponse = completion.choices[0]?.message?.content?.trim() || 
+      "Maaf, saya tidak bisa merespons saat ini.";
 
-    // Save messages to database (optional, don't fail if db error)
-    if (sessionId) {
-      try {
-        await supabase.from("chat_messages").insert({
-          session_id: sessionId,
-          role: "user",
-          content: message,
-        });
+    // Save user message to database
+    const { error: userMsgError } = await supabase
+      .from("chat_messages")
+      .insert({
+        session_id: activeSessionId,
+        role: "user",
+        content: message,
+      });
 
-        await supabase.from("chat_messages").insert({
-          session_id: sessionId,
-          role: "assistant",
-          content: aiResponse,
-        });
-
-        await supabase
-          .from("chat_sessions")
-          .update({ 
-            messages_count: history.length + 2,
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", sessionId);
-      } catch {
-        // Ignore database errors
-      }
+    if (userMsgError) {
+      console.error("User message save error:", userMsgError);
     }
 
-    return NextResponse.json({ response: aiResponse });
+    // Save AI response to database
+    const { error: aiMsgError } = await supabase
+      .from("chat_messages")
+      .insert({
+        session_id: activeSessionId,
+        role: "assistant",
+        content: aiResponse,
+      });
+
+    if (aiMsgError) {
+      console.error("AI message save error:", aiMsgError);
+    }
+
+    // Update session
+    const newCount = (historyMessages?.length || 0) + 2;
+    await supabase
+      .from("chat_sessions")
+      .update({ 
+        messages_count: newCount,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", activeSessionId);
+
+    return NextResponse.json({ 
+      response: aiResponse,
+      sessionId: activeSessionId // Return session ID for client to track
+    });
   } catch (error) {
-    console.error("Gemini API error:", error);
+    console.error("Groq API error:", error);
     
-    // Return more detailed error for debugging
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ 
       error: errorMessage,
@@ -119,4 +157,3 @@ SoftrAI:`;
     }, { status: 200 });
   }
 }
-
