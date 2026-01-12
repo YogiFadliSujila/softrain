@@ -5,10 +5,13 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { 
   Mic, MicOff, ArrowLeft, Zap, Loader2, AlertTriangle, 
-  Trophy, Play, Square, Clock, RotateCcw, CheckCircle
+  Trophy, Play, Square, Clock, RotateCcw, CheckCircle, Volume2, Camera
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AudioAnalyzer, VoiceAnalysisResult, VoiceMetrics } from "@/lib/audio-analyzer";
+import { WebcamFeedback } from "@/components/webcam-feedback";
+import { FaceAnalysisResult } from "@/lib/face-analyzer";
 
 interface Challenge {
   id: string;
@@ -48,7 +51,9 @@ interface Result {
     wordCount: FeedbackDetail;
     fluency: FeedbackDetail;
     content: FeedbackDetail;
+    voice?: FeedbackDetail;  // NEW: Voice analysis feedback
   };
+  voiceAnalysis?: VoiceAnalysisResult;  // NEW: Raw voice data
 }
 
 type Phase = "prep" | "recording" | "result";
@@ -73,6 +78,15 @@ export default function SpeaktrainDetailPage({
   const [recordingTime, setRecordingTime] = useState(0);
   const [speechSupported, setSpeechSupported] = useState(true);
   const [randomTopic, setRandomTopic] = useState<string | null>(null);
+  
+  // Voice analysis
+  const [currentVolume, setCurrentVolume] = useState(0);
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
+  const voiceResultRef = useRef<VoiceAnalysisResult | null>(null);
+  
+  // Face analysis (optional webcam)
+  const faceResultRef = useRef<FaceAnalysisResult | null>(null);
   
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -121,13 +135,27 @@ export default function SpeaktrainDetailPage({
     fetchChallenge();
   }, [challengeId]);
 
-  const startRecording = useCallback(() => {
+  // Handle voice metrics update
+  const handleVoiceMetrics = useCallback((metrics: VoiceMetrics) => {
+    setCurrentVolume(metrics.currentVolume);
+    setIsVoiceActive(metrics.isActive);
+  }, []);
+
+  const startRecording = useCallback(async () => {
     if (!challenge) return;
     
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setError("Browser tidak mendukung Web Speech API");
       return;
+    }
+
+    // Start audio analyzer for voice analysis
+    audioAnalyzerRef.current = new AudioAnalyzer();
+    const audioStarted = await audioAnalyzerRef.current.start(handleVoiceMetrics);
+    
+    if (!audioStarted) {
+      console.warn("Audio analyzer failed to start - continuing without voice analysis");
     }
 
     const recognition = new SpeechRecognition();
@@ -179,7 +207,7 @@ export default function SpeaktrainDetailPage({
     timerRef.current = setInterval(() => {
       setRecordingTime(t => t + 1);
     }, 1000);
-  }, [challenge, isRecording]);
+  }, [challenge, isRecording, handleVoiceMetrics]);
 
   const stopRecording = useCallback(async () => {
     if (recognitionRef.current) {
@@ -190,7 +218,15 @@ export default function SpeaktrainDetailPage({
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    
+    // Stop audio analyzer and get results
+    if (audioAnalyzerRef.current) {
+      voiceResultRef.current = audioAnalyzerRef.current.stop();
+      audioAnalyzerRef.current = null;
+    }
+    
     setIsRecording(false);
+    setCurrentVolume(0);
 
     // Submit result
     if (!challengeId || !transcript.trim()) {
@@ -209,7 +245,8 @@ export default function SpeaktrainDetailPage({
           challengeId,
           transcript: transcript.trim(),
           durationSeconds: recordingTime,
-          wordCount
+          wordCount,
+          voiceAnalysis: voiceResultRef.current  // Include voice analysis
         })
       });
 
@@ -237,6 +274,8 @@ export default function SpeaktrainDetailPage({
     setRecordingTime(0);
     setResult(null);
     setError(null);
+    setCurrentVolume(0);
+    voiceResultRef.current = null;
     if (challenge?.content.random_topics) {
       const topics = challenge.content.random_topics;
       setRandomTopic(topics[Math.floor(Math.random() * topics.length)]);
@@ -247,6 +286,13 @@ export default function SpeaktrainDetailPage({
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Get volume bar color
+  const getVolumeColor = (volume: number) => {
+    if (volume < 15) return "bg-yellow-500";
+    if (volume > 70) return "bg-red-500";
+    return "bg-green-500";
   };
 
   if (loading) {
@@ -361,6 +407,38 @@ export default function SpeaktrainDetailPage({
                 <p className="text-xs mt-1">{result.feedback.fluency.wpm} kata/menit</p>
               </div>
 
+              {/* Voice Analysis - NEW */}
+              {result.feedback.voice && (
+                <div className="p-3 rounded-lg bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/20">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="font-medium flex items-center gap-2">
+                      <Volume2 className="h-4 w-4 text-purple-500" />
+                      Analisis Suara
+                    </span>
+                    <span className={result.feedback.voice.score >= 18 ? "text-green-600" : "text-yellow-600"}>
+                      {result.feedback.voice.score}/25
+                    </span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{result.feedback.voice.message}</p>
+                  {result.voiceAnalysis && (
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                      <div className="text-center p-2 bg-background/50 rounded">
+                        <p className="font-medium">{result.voiceAnalysis.averageVolume}%</p>
+                        <p className="text-muted-foreground">Volume</p>
+                      </div>
+                      <div className="text-center p-2 bg-background/50 rounded">
+                        <p className="font-medium">{result.voiceAnalysis.volumeVariation}</p>
+                        <p className="text-muted-foreground">Variasi</p>
+                      </div>
+                      <div className="text-center p-2 bg-background/50 rounded">
+                        <p className="font-medium">{result.voiceAnalysis.silencePercentage}%</p>
+                        <p className="text-muted-foreground">Jeda</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Content */}
               <div className="p-3 rounded-lg bg-muted">
                 <div className="flex justify-between items-center mb-1">
@@ -419,16 +497,53 @@ export default function SpeaktrainDetailPage({
           </p>
         </div>
 
-        {/* Recording indicator */}
-        <div className="flex justify-center">
+        {/* Recording indicator with volume meter */}
+        <div className="flex flex-col items-center gap-4">
           <motion.div
-            animate={{ scale: [1, 1.2, 1] }}
-            transition={{ duration: 1.5, repeat: Infinity }}
+            animate={{ scale: isVoiceActive ? [1, 1.1, 1] : 1 }}
+            transition={{ duration: 0.3, repeat: isVoiceActive ? Infinity : 0 }}
             className="w-20 h-20 rounded-full bg-red-500 flex items-center justify-center"
           >
             <Mic className="h-10 w-10 text-white" />
           </motion.div>
+          
+          {/* Volume Meter - NEW */}
+          <div className="w-full max-w-xs">
+            <div className="flex items-center gap-2 mb-1">
+              <Volume2 className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Volume</span>
+              <span className="text-xs ml-auto">{currentVolume}%</span>
+            </div>
+            <div className="h-3 bg-muted rounded-full overflow-hidden">
+              <motion.div 
+                className={`h-full ${getVolumeColor(currentVolume)} transition-colors`}
+                animate={{ width: `${currentVolume}%` }}
+                transition={{ duration: 0.1 }}
+              />
+            </div>
+            <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+              <span>Pelan</span>
+              <span>Ideal</span>
+              <span>Keras</span>
+            </div>
+          </div>
         </div>
+
+        {/* Webcam Feedback - Optional Face Analysis */}
+        <Card>
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Camera className="h-4 w-4 text-purple-500" />
+              <span className="text-sm font-medium">Analisis Ekspresi (Opsional)</span>
+            </div>
+            <WebcamFeedback 
+              isActive={isRecording}
+              onResult={(result) => {
+                faceResultRef.current = result;
+              }}
+            />
+          </CardContent>
+        </Card>
 
         {/* Live transcript */}
         <Card>
@@ -509,6 +624,19 @@ export default function SpeaktrainDetailPage({
             <span>•</span>
             <span>Min. {challenge.content.evaluation_criteria.min_words} kata</span>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* NEW: Voice Analysis Info */}
+      <Card className="border-purple-500/30 bg-gradient-to-r from-purple-500/5 to-pink-500/5">
+        <CardContent className="pt-4">
+          <div className="flex items-center gap-2 text-purple-600 mb-2">
+            <Volume2 className="h-5 w-5" />
+            <span className="font-medium">Analisis Suara Real-time</span>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Sistem akan menganalisis volume, intonasi, dan jeda bicara Anda untuk memberikan feedback yang lebih lengkap.
+          </p>
         </CardContent>
       </Card>
 

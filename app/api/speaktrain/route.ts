@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { challengeId, transcript, durationSeconds, wordCount } = await request.json();
+    const { challengeId, transcript, durationSeconds, wordCount, voiceAnalysis } = await request.json();
 
     if (!challengeId || !transcript) {
       return NextResponse.json({ 
@@ -235,7 +235,70 @@ export async function POST(request: NextRequest) {
     }
     contentScore = Math.round((elementsFound / criteria.key_elements.length) * 25);
 
-    const totalScore = durationScore + wordCountScore + fluencyScore + contentScore;
+    // Voice analysis score (NEW) - scale down to 20 points max
+    let voiceScore = 0;
+    let voiceMessage = "Analisis suara tidak tersedia";
+    
+    if (voiceAnalysis) {
+      // Volume scoring (0-8 points)
+      if (voiceAnalysis.averageVolume >= 20 && voiceAnalysis.averageVolume <= 60) {
+        voiceScore += 8;
+      } else if (voiceAnalysis.averageVolume >= 15 && voiceAnalysis.averageVolume <= 70) {
+        voiceScore += 6;
+      } else if (voiceAnalysis.averageVolume < 15) {
+        voiceScore += 2;
+      } else {
+        voiceScore += 4;
+      }
+      
+      // Variation scoring (0-7 points) - higher std dev = more expressive
+      if (voiceAnalysis.volumeVariation >= 10 && voiceAnalysis.volumeVariation <= 30) {
+        voiceScore += 7;
+      } else if (voiceAnalysis.volumeVariation >= 5) {
+        voiceScore += 5;
+      } else {
+        voiceScore += 2;
+      }
+      
+      // Silence/Pause scoring (0-5 points)
+      if (voiceAnalysis.silencePercentage >= 10 && voiceAnalysis.silencePercentage <= 30) {
+        voiceScore += 5;
+      } else if (voiceAnalysis.silencePercentage < 10) {
+        voiceScore += 3;
+      } else {
+        voiceScore += 2;
+      }
+      
+      // Generate voice message
+      const messages = [];
+      if (voiceAnalysis.averageVolume >= 20 && voiceAnalysis.averageVolume <= 60) {
+        messages.push("Volume ideal");
+      } else if (voiceAnalysis.averageVolume < 15) {
+        messages.push("Volume terlalu pelan");
+      } else if (voiceAnalysis.averageVolume > 70) {
+        messages.push("Volume terlalu keras");
+      }
+      
+      if (voiceAnalysis.volumeVariation >= 10) {
+        messages.push("Intonasi ekspresif");
+      } else if (voiceAnalysis.volumeVariation < 5) {
+        messages.push("Intonasi monoton");
+      }
+      
+      if (voiceAnalysis.silencePercentage >= 10 && voiceAnalysis.silencePercentage <= 30) {
+        messages.push("Jeda yang baik");
+      }
+      
+      voiceMessage = messages.join(". ") || "Analisis suara selesai";
+    }
+
+    // Adjust base scores: each now max 20 instead of 25 to make room for voice
+    const adjustedDuration = Math.round(durationScore * 0.8);
+    const adjustedWordCount = Math.round(wordCountScore * 0.8);
+    const adjustedFluency = Math.round(fluencyScore * 0.8);
+    const adjustedContent = Math.round(contentScore * 0.8);
+
+    const totalScore = adjustedDuration + adjustedWordCount + adjustedFluency + adjustedContent + voiceScore;
     const maxScore = 100;
 
     // Deduct energy
@@ -249,39 +312,43 @@ export async function POST(request: NextRequest) {
     // Generate feedback
     const feedback = {
       duration: {
-        score: durationScore,
+        score: adjustedDuration,
         actual: durationSeconds,
         target: targetDuration,
-        message: durationScore >= 20 
+        message: adjustedDuration >= 16 
           ? "Durasi bicara sangat baik!" 
-          : durationScore >= 15 
+          : adjustedDuration >= 12 
             ? "Durasi cukup baik, bisa lebih tepat." 
             : "Perlu latihan untuk mengatur durasi."
       },
       wordCount: {
-        score: wordCountScore,
+        score: adjustedWordCount,
         actual: wordCount,
         target: criteria.min_words,
-        message: wordCountScore >= 20 
+        message: adjustedWordCount >= 16 
           ? "Jumlah kata mencukupi!" 
           : "Coba tambahkan lebih banyak konten."
       },
       fluency: {
-        score: fluencyScore,
+        score: adjustedFluency,
         wpm: Math.round(wpm),
-        message: fluencyScore >= 20 
+        message: adjustedFluency >= 16 
           ? "Kecepatan bicara sangat baik!" 
-          : fluencyScore >= 15 
+          : adjustedFluency >= 12 
             ? "Kecepatan cukup baik." 
             : wpm < 80 
               ? "Bicara terlalu lambat, coba lebih natural." 
               : "Bicara terlalu cepat, coba lebih tenang."
       },
+      voice: {
+        score: voiceScore,
+        message: voiceMessage
+      },
       content: {
-        score: contentScore,
+        score: adjustedContent,
         elementsFound,
         totalElements: criteria.key_elements.length,
-        message: contentScore >= 20 
+        message: adjustedContent >= 16 
           ? "Konten mencakup semua elemen penting!" 
           : "Coba sertakan lebih banyak elemen kunci."
       }
@@ -363,7 +430,8 @@ export async function POST(request: NextRequest) {
       score: totalScore,
       maxScore,
       pointsEarned,
-      feedback
+      feedback,
+      voiceAnalysis: voiceAnalysis || null
     });
   } catch (error) {
     console.error("Speaktrain POST error:", error);
