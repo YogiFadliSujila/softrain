@@ -11,6 +11,9 @@
   "dependencies": {
     "@google/genai": "^1.35.0",
     "@google/generative-ai": "^0.24.1",
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/drawing_utils": "^0.3.1675466124",
+    "@mediapipe/hands": "^0.4.1675469240",
     "@radix-ui/react-slot": "^1.2.4",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.90.1",

@@ -1,18 +1,33 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Users, ArrowLeft, Zap, Loader2, AlertTriangle, 
-  Trophy, Send, CheckCircle, User, Bot
+  Trophy, CheckCircle, User, Bot, Mic, MicOff, Video, VideoOff,
+  Volume2, Camera, ChevronDown
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AudioAnalyzer, VoiceAnalysisResult } from "@/lib/audio-analyzer";
+import { WebcamFeedback } from "@/components/webcam-feedback";
+import { RealtimeFeedback } from "@/components/realtime-feedback";
+import { FaceAnalysisResult, FaceMetrics } from "@/lib/face-analyzer";
+
+// Speech Recognition type declaration
+declare global {
+  interface Window {
+    SpeechRecognition: typeof SpeechRecognition;
+    webkitSpeechRecognition: typeof SpeechRecognition;
+  }
+}
 
 interface Message {
   role: "user" | "ai";
   content: string;
+  voiceAnalysis?: VoiceAnalysisResult;
+  faceAnalysis?: FaceAnalysisResult;
 }
 
 interface Scenario {
@@ -71,12 +86,25 @@ export default function RoleplayrollDetailPage({
   const [completing, setCompleting] = useState(false);
   const [phase, setPhase] = useState<Phase>("intro");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [inputValue, setInputValue] = useState("");
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exchangeCount, setExchangeCount] = useState(0);
 
+  // Voice + Video states
+  const [isRecording, setIsRecording] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [currentVolume, setCurrentVolume] = useState(0);
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [faceMetrics, setFaceMetrics] = useState<FaceMetrics | null>(null);
+  const [speechSupported, setSpeechSupported] = useState(true);
+
+  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
+  const voiceResultRef = useRef<VoiceAnalysisResult | null>(null);
+  const faceResultRef = useRef<FaceAnalysisResult | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     params.then(p => setScenarioId(p.id));
@@ -111,6 +139,50 @@ export default function RoleplayrollDetailPage({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Initialize speech recognition
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        recognitionRef.current = new SpeechRecognition();
+        recognitionRef.current.continuous = true;
+        recognitionRef.current.interimResults = true;
+        recognitionRef.current.lang = "id-ID";
+
+        recognitionRef.current.onresult = (event: SpeechRecognitionEvent) => {
+          let finalTranscript = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const t = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              finalTranscript += t + " ";
+            }
+          }
+          if (finalTranscript) {
+            setTranscript(prev => prev + finalTranscript);
+          }
+        };
+
+        recognitionRef.current.onerror = () => {
+          // Silent error handling
+        };
+      } else {
+        setSpeechSupported(false);
+      }
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, []);
+
+  // Volume update callback
+  const handleVolumeUpdate = useCallback((metrics: { volume: number; isActive: boolean }) => {
+    setCurrentVolume(metrics.volume);
+    setIsVoiceActive(metrics.isActive);
+  }, []);
+
   const startConversation = async () => {
     if (!scenarioId) return;
     
@@ -139,15 +211,57 @@ export default function RoleplayrollDetailPage({
     }
   };
 
-  const sendMessage = async () => {
-    if (!inputValue.trim() || !scenarioId || sending) return;
+  const startRecording = async () => {
+    setIsRecording(true);
+    setTranscript("");
 
-    const userMessage = inputValue.trim();
-    setInputValue("");
+    // Start speech recognition
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.start();
+      } catch {
+        // Already started
+      }
+    }
+
+    // Start audio analyzer
+    audioAnalyzerRef.current = new AudioAnalyzer();
+    await audioAnalyzerRef.current.start(handleVolumeUpdate);
+  };
+
+  const stopRecording = async () => {
+    // Stop speech recognition
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+
+    // Stop audio analyzer
+    if (audioAnalyzerRef.current) {
+      voiceResultRef.current = audioAnalyzerRef.current.stop();
+      audioAnalyzerRef.current = null;
+    }
+
+    setIsRecording(false);
+
+    // Send message if we have transcript
+    if (transcript.trim()) {
+      await sendVoiceMessage(transcript.trim());
+    }
+  };
+
+  const sendVoiceMessage = async (content: string) => {
+    if (!scenarioId || sending) return;
+
     setSending(true);
-
-    // Add user message
-    setMessages(prev => [...prev, { role: "user", content: userMessage }]);
+    
+    // Add user message with analysis data
+    const userMessage: Message = { 
+      role: "user", 
+      content,
+      voiceAnalysis: voiceResultRef.current || undefined,
+      faceAnalysis: faceResultRef.current || undefined
+    };
+    setMessages(prev => [...prev, userMessage]);
     setExchangeCount(prev => prev + 1);
 
     try {
@@ -157,9 +271,11 @@ export default function RoleplayrollDetailPage({
         body: JSON.stringify({
           scenarioId,
           action: "chat",
-          userMessage,
+          userMessage: content,
           conversationHistory: messages,
-          exchangeCount: exchangeCount + 1
+          exchangeCount: exchangeCount + 1,
+          voiceAnalysis: voiceResultRef.current,
+          faceAnalysis: faceResultRef.current
         })
       });
 
@@ -173,6 +289,8 @@ export default function RoleplayrollDetailPage({
       setError("Gagal mendapat respons AI");
     } finally {
       setSending(false);
+      setTranscript("");
+      voiceResultRef.current = null;
     }
   };
 
@@ -206,13 +324,7 @@ export default function RoleplayrollDetailPage({
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
-
+  // Loading state
   if (loading && !scenario) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
@@ -221,6 +333,7 @@ export default function RoleplayrollDetailPage({
     );
   }
 
+  // Error state
   if ((error && !scenario) || !scenario) {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center text-center p-4">
@@ -330,7 +443,7 @@ export default function RoleplayrollDetailPage({
     );
   }
 
-  // Chat Phase
+  // Chat Phase - Voice + Video Only
   if (phase === "chat") {
     const minExchanges = content.min_exchanges;
     const maxExchanges = content.max_exchanges;
@@ -338,7 +451,7 @@ export default function RoleplayrollDetailPage({
     const mustComplete = exchangeCount >= maxExchanges;
 
     return (
-      <div className="flex flex-col h-[calc(100vh-120px)] max-w-2xl mx-auto">
+      <div className="flex flex-col h-[calc(100vh-120px)] max-w-3xl mx-auto">
         {/* Header */}
         <div className="flex items-center gap-3 mb-4">
           <Link href="/dashboard/roleplayroll">
@@ -357,97 +470,180 @@ export default function RoleplayrollDetailPage({
           </div>
         </div>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-2">
-          <AnimatePresence>
-            {messages.map((msg, idx) => (
-              <motion.div
-                key={idx}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
-              >
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                  msg.role === "user" ? "bg-primary" : "bg-indigo-500"
-                }`}>
-                  {msg.role === "user" ? (
-                    <User className="h-4 w-4 text-primary-foreground" />
-                  ) : (
+        {/* Main Content - Split View */}
+        <div className="flex-1 grid md:grid-cols-2 gap-4 overflow-hidden">
+          
+          {/* Left: Video + Controls */}
+          <div className="space-y-4">
+            {/* Collapsible Video Panel */}
+            <details className="group" open>
+              <summary className="flex items-center justify-between p-3 bg-muted/50 rounded-lg cursor-pointer">
+                <div className="flex items-center gap-2">
+                  <Camera className="h-4 w-4 text-purple-500" />
+                  <span className="text-sm font-medium">Kamera & Analisis AI</span>
+                </div>
+                <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="mt-2">
+                <WebcamFeedback 
+                  isActive={isRecording}
+                  onResult={(r) => { faceResultRef.current = r; }}
+                  onMetricsUpdate={(m) => { setFaceMetrics(m); }}
+                />
+              </div>
+            </details>
+
+            {/* Recording Controls */}
+            <Card>
+              <CardContent className="pt-4 space-y-4">
+                {/* Volume Meter */}
+                {isRecording && (
+                  <div className="flex items-center gap-3">
+                    <motion.div
+                      animate={{ scale: isVoiceActive ? [1, 1.1, 1] : 1 }}
+                      transition={{ duration: 0.3, repeat: isVoiceActive ? Infinity : 0 }}
+                      className="w-12 h-12 rounded-full bg-red-500 flex items-center justify-center"
+                    >
+                      <Mic className="h-6 w-6 text-white" />
+                    </motion.div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                        <Volume2 className="h-3 w-3" />
+                        <span>Volume: {currentVolume}%</span>
+                      </div>
+                      <div className="h-2 bg-muted rounded-full overflow-hidden">
+                        <motion.div 
+                          className={`h-full ${
+                            currentVolume > 60 ? "bg-green-500" : 
+                            currentVolume > 20 ? "bg-yellow-500" : "bg-red-500"
+                          }`}
+                          animate={{ width: `${currentVolume}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Real-time Coaching */}
+                {isRecording && (
+                  <RealtimeFeedback 
+                    voiceMetrics={{ currentVolume, isActive: isVoiceActive }}
+                    faceMetrics={faceMetrics}
+                    recordingTime={0}
+                  />
+                )}
+
+                {/* Live Transcript */}
+                {isRecording && transcript && (
+                  <div className="p-3 bg-muted/50 rounded-lg text-sm">
+                    <p className="text-xs text-muted-foreground mb-1">Transkripsi:</p>
+                    <p>{transcript}</p>
+                  </div>
+                )}
+
+                {/* Record Button */}
+                {!speechSupported ? (
+                  <div className="p-3 bg-yellow-500/10 rounded-lg text-sm text-yellow-700">
+                    Browser tidak mendukung Speech Recognition
+                  </div>
+                ) : !mustComplete && (
+                  <Button
+                    onClick={isRecording ? stopRecording : startRecording}
+                    variant={isRecording ? "destructive" : "default"}
+                    className="w-full h-14"
+                    disabled={sending}
+                  >
+                    {sending ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : isRecording ? (
+                      <>
+                        <MicOff className="h-5 w-5 mr-2" />
+                        Kirim Respons
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="h-5 w-5 mr-2" />
+                        Mulai Berbicara
+                      </>
+                    )}
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Right: Messages */}
+          <div className="flex flex-col">
+            <div className="flex-1 overflow-y-auto space-y-3 pr-2">
+              <AnimatePresence>
+                {messages.map((msg, idx) => (
+                  <motion.div
+                    key={idx}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={`flex gap-2 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
+                  >
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                      msg.role === "user" ? "bg-primary" : "bg-indigo-500"
+                    }`}>
+                      {msg.role === "user" ? (
+                        <User className="h-4 w-4 text-primary-foreground" />
+                      ) : (
+                        <Bot className="h-4 w-4 text-white" />
+                      )}
+                    </div>
+                    <div className={`max-w-[85%] p-3 rounded-lg ${
+                      msg.role === "user" 
+                        ? "bg-primary text-primary-foreground" 
+                        : "bg-muted"
+                    }`}>
+                      <p className="text-sm">{msg.content}</p>
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+              
+              {sending && (
+                <div className="flex gap-2">
+                  <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center">
                     <Bot className="h-4 w-4 text-white" />
-                  )}
+                  </div>
+                  <div className="p-3 rounded-lg bg-muted">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </div>
                 </div>
-                <div className={`max-w-[80%] p-3 rounded-lg ${
-                  msg.role === "user" 
-                    ? "bg-primary text-primary-foreground" 
-                    : "bg-muted"
-                }`}>
-                  <p className="text-sm">{msg.content}</p>
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-          
-          {sending && (
-            <div className="flex gap-3">
-              <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center">
-                <Bot className="h-4 w-4 text-white" />
-              </div>
-              <div className="p-3 rounded-lg bg-muted">
-                <Loader2 className="h-4 w-4 animate-spin" />
-              </div>
+              )}
+              
+              <div ref={messagesEndRef} />
             </div>
-          )}
-          
-          <div ref={messagesEndRef} />
-        </div>
 
-        {/* Error */}
-        {error && (
-          <div className="mb-4 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-            {error}
-          </div>
-        )}
-
-        {/* Input */}
-        {!mustComplete ? (
-          <div className="flex gap-2">
-            <textarea
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyPress}
-              placeholder="Ketik respons Anda..."
-              className="flex-1 p-3 rounded-lg border resize-none h-12 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              disabled={sending}
-            />
-            <Button 
-              onClick={sendMessage} 
-              disabled={!inputValue.trim() || sending}
-              size="icon"
-              className="h-12 w-12"
-            >
-              <Send className="h-5 w-5" />
-            </Button>
-          </div>
-        ) : null}
-
-        {/* Complete button */}
-        {(canComplete || mustComplete) && (
-          <Button 
-            onClick={completeSession}
-            disabled={completing}
-            className="mt-3 w-full"
-            variant={mustComplete ? "default" : "outline"}
-          >
-            {completing ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
-            ) : (
-              <>
-                <CheckCircle className="h-5 w-5 mr-2" />
-                {mustComplete ? "Selesaikan Sesi" : "Selesaikan & Lihat Hasil"}
-              </>
+            {/* Error */}
+            {error && (
+              <div className="mt-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+                {error}
+              </div>
             )}
-          </Button>
-        )}
+
+            {/* Complete button */}
+            {(canComplete || mustComplete) && (
+              <Button 
+                onClick={completeSession}
+                disabled={completing}
+                className="mt-3 w-full"
+                variant={mustComplete ? "default" : "outline"}
+              >
+                {completing ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <>
+                    <CheckCircle className="h-5 w-5 mr-2" />
+                    {mustComplete ? "Selesaikan Sesi" : "Selesaikan & Lihat Hasil"}
+                  </>
+                )}
+              </Button>
+            )}
+          </div>
+        </div>
       </div>
     );
   }
@@ -470,6 +666,23 @@ export default function RoleplayrollDetailPage({
           <span className="text-sm font-medium">{scenario.energy_cost}</span>
         </div>
       </div>
+
+      {/* Mode Info */}
+      <Card className="border-purple-500/30 bg-purple-500/5">
+        <CardContent className="pt-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center">
+              <Video className="h-5 w-5 text-purple-500" />
+            </div>
+            <div>
+              <p className="font-medium">Mode Voice + Video</p>
+              <p className="text-sm text-muted-foreground">
+                Gunakan mikrofon dan kamera untuk berinteraksi
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Scenario Info */}
       <Card className="border-indigo-500/30">
@@ -499,24 +712,13 @@ export default function RoleplayrollDetailPage({
         </CardContent>
       </Card>
 
-      {/* Conversation Flow */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Alur Percakapan</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ol className="space-y-2 text-sm">
-            {content.conversation_flow.map((flow, idx) => (
-              <li key={idx} className="flex items-start gap-2">
-                <span className="w-5 h-5 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center flex-shrink-0">
-                  {idx + 1}
-                </span>
-                <span>{flow}</span>
-              </li>
-            ))}
-          </ol>
-        </CardContent>
-      </Card>
+      {/* Requirements */}
+      <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+        <p className="text-sm text-yellow-700 dark:text-yellow-300">
+          ⚠️ Fitur ini memerlukan akses <strong>mikrofon</strong> dan <strong>kamera</strong>. 
+          Pastikan browser mendukung Speech Recognition (Chrome/Edge).
+        </p>
+      </div>
 
       {/* Skills */}
       <div className="flex flex-wrap gap-2">
@@ -530,7 +732,7 @@ export default function RoleplayrollDetailPage({
       {/* Start button */}
       <Button 
         onClick={startConversation} 
-        className="w-full" 
+        className="w-full h-14" 
         size="lg"
         disabled={loading}
       >
@@ -538,8 +740,8 @@ export default function RoleplayrollDetailPage({
           <Loader2 className="h-5 w-5 animate-spin" />
         ) : (
           <>
-            <Users className="h-5 w-5 mr-2" />
-            Mulai Percakapan
+            <Video className="h-5 w-5 mr-2" />
+            Mulai Roleplay
           </>
         )}
       </Button>

@@ -2,13 +2,17 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Camera, CameraOff, Smile, Loader2 } from "lucide-react";
+import { Camera, CameraOff, Smile, Loader2, Hand } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FaceAnalyzer, FaceAnalysisResult, FaceMetrics, expressionLabels } from "@/lib/face-analyzer";
+import { GestureAnalyzer, GestureResult, GestureMetrics, gestureLabels } from "@/lib/gesture-analyzer";
 
 interface WebcamFeedbackProps {
   isActive: boolean;
   onResult?: (result: FaceAnalysisResult) => void;
+  onMetricsUpdate?: (metrics: FaceMetrics) => void;
+  onGestureResult?: (result: GestureResult) => void;
+  onGestureUpdate?: (metrics: GestureMetrics) => void;
 }
 
 // All 7 expressions with colors
@@ -32,9 +36,17 @@ interface AllExpressions {
   surprised: number;
 }
 
-export function WebcamFeedback({ isActive, onResult }: WebcamFeedbackProps) {
+export function WebcamFeedback({ 
+  isActive, 
+  onResult, 
+  onMetricsUpdate,
+  onGestureResult,
+  onGestureUpdate
+}: WebcamFeedbackProps) {
   const [enabled, setEnabled] = useState(false);
+  const [gestureEnabled, setGestureEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [gestureLoading, setGestureLoading] = useState(false);
   const [hasWebcam, setHasWebcam] = useState(true);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [metrics, setMetrics] = useState<FaceMetrics & { allExpressions?: AllExpressions }>({
@@ -43,9 +55,16 @@ export function WebcamFeedback({ isActive, onResult }: WebcamFeedbackProps) {
     hasFace: false,
     currentExpression: 'none'
   });
+  const [gestureMetrics, setGestureMetrics] = useState<GestureMetrics>({
+    handsDetected: 0,
+    currentGesture: 'none',
+    isActive: false
+  });
   
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const analyzerRef = useRef<FaceAnalyzer | null>(null);
+  const gestureAnalyzerRef = useRef<GestureAnalyzer | null>(null);
   const resultRef = useRef<FaceAnalysisResult | null>(null);
 
   // Check webcam availability
@@ -65,7 +84,11 @@ export function WebcamFeedback({ isActive, onResult }: WebcamFeedbackProps) {
   // Handle metrics update
   const handleMetrics = useCallback((m: FaceMetrics & { allExpressions?: AllExpressions }) => {
     setMetrics(m);
-  }, []);
+    // Pass to parent for real-time feedback
+    if (onMetricsUpdate) {
+      onMetricsUpdate(m);
+    }
+  }, [onMetricsUpdate]);
 
   // Start/stop analyzer when enabled changes
   useEffect(() => {
@@ -89,7 +112,17 @@ export function WebcamFeedback({ isActive, onResult }: WebcamFeedbackProps) {
         onResult(result);
       }
     }
-  }, [isActive, onResult]);
+    
+    // Stop gesture analyzer too
+    if (!isActive && gestureAnalyzerRef.current) {
+      const gestureResult = gestureAnalyzerRef.current.stop();
+      gestureAnalyzerRef.current = null;
+      
+      if (onGestureResult) {
+        onGestureResult(gestureResult);
+      }
+    }
+  }, [isActive, onResult, onGestureResult]);
 
   const startAnalysis = async () => {
     if (!videoRef.current || analyzerRef.current) return;
@@ -123,10 +156,82 @@ export function WebcamFeedback({ isActive, onResult }: WebcamFeedbackProps) {
     if (enabled) {
       stopAnalysis();
       setEnabled(false);
+      // Also disable gesture if webcam is disabled
+      if (gestureEnabled) {
+        stopGestureAnalysis();
+        setGestureEnabled(false);
+      }
     } else {
       setEnabled(true);
     }
   };
+
+  // Gesture analysis functions
+  const handleGestureMetrics = useCallback((m: GestureMetrics) => {
+    setGestureMetrics(m);
+    if (onGestureUpdate) {
+      onGestureUpdate(m);
+    }
+  }, [onGestureUpdate]);
+
+  const startGestureAnalysis = async () => {
+    if (!videoRef.current || !canvasRef.current || gestureAnalyzerRef.current) return;
+    
+    setGestureLoading(true);
+    
+    try {
+      // Set canvas size
+      canvasRef.current.width = videoRef.current.videoWidth || 320;
+      canvasRef.current.height = videoRef.current.videoHeight || 240;
+      
+      gestureAnalyzerRef.current = new GestureAnalyzer();
+      const started = await gestureAnalyzerRef.current.start(
+        videoRef.current,
+        canvasRef.current,
+        handleGestureMetrics
+      );
+      
+      if (!started) {
+        setGestureEnabled(false);
+        gestureAnalyzerRef.current = null;
+      }
+    } catch (err) {
+      console.error("Start gesture analysis error:", err);
+      setGestureEnabled(false);
+    } finally {
+      setGestureLoading(false);
+    }
+  };
+
+  const stopGestureAnalysis = () => {
+    if (gestureAnalyzerRef.current) {
+      gestureAnalyzerRef.current.stop();
+      gestureAnalyzerRef.current = null;
+    }
+  };
+
+  const toggleGesture = async () => {
+    if (gestureEnabled) {
+      stopGestureAnalysis();
+      setGestureEnabled(false);
+    } else {
+      setGestureEnabled(true);
+      // Start gesture analysis if webcam is already running
+      if (enabled && videoRef.current) {
+        await startGestureAnalysis();
+      }
+    }
+  };
+
+  // Start gesture when enabled and webcam ready
+  useEffect(() => {
+    if (gestureEnabled && enabled && videoRef.current && canvasRef.current) {
+      startGestureAnalysis();
+    }
+    return () => {
+      stopGestureAnalysis();
+    };
+  }, [gestureEnabled, enabled]);
 
   if (!hasWebcam) {
     return null;
@@ -231,6 +336,70 @@ export function WebcamFeedback({ isActive, onResult }: WebcamFeedbackProps) {
               <span className="font-medium">{expressionLabels[metrics.currentExpression] || metrics.currentExpression}</span>
             </div>
           )}
+
+          {/* Gesture Analysis Section */}
+          <div className="border-t pt-3 mt-3">
+            <Button
+              variant={gestureEnabled ? "default" : "outline"}
+              size="sm"
+              onClick={toggleGesture}
+              disabled={gestureLoading || !isActive}
+              className="w-full"
+            >
+              {gestureLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Hand className="h-4 w-4 mr-2" />
+              )}
+              {gestureEnabled ? "Matikan Analisis Gestur" : "Aktifkan Analisis Gestur"}
+            </Button>
+
+            {/* Gesture Canvas Overlay */}
+            {gestureEnabled && (
+              <div className="mt-3 space-y-2">
+                <div className="relative rounded-lg overflow-hidden bg-black/50 aspect-video">
+                  <canvas
+                    ref={canvasRef}
+                    className="w-full h-full"
+                  />
+                  
+                  {/* Hand indicator */}
+                  <div className="absolute top-2 left-2">
+                    <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      gestureMetrics.handsDetected > 0 
+                        ? "bg-purple-500/80 text-white" 
+                        : "bg-gray-500/80 text-white"
+                    }`}>
+                      {gestureMetrics.handsDetected > 0 
+                        ? `${gestureMetrics.handsDetected} Tangan` 
+                        : "Tidak ada tangan"}
+                    </div>
+                  </div>
+
+                  {/* Gesture label */}
+                  {gestureMetrics.handsDetected > 0 && (
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      className="absolute top-2 right-2"
+                    >
+                      <div className="bg-green-500/80 px-2 py-1 rounded-full text-xs text-white font-medium">
+                        {gestureLabels[gestureMetrics.currentGesture] || gestureMetrics.currentGesture}
+                      </div>
+                    </motion.div>
+                  )}
+                </div>
+
+                {/* Current Gesture Display */}
+                <div className="text-center p-2 rounded bg-muted">
+                  <span className="text-sm">Gestur: </span>
+                  <span className="font-medium">
+                    {gestureLabels[gestureMetrics.currentGesture] || gestureMetrics.currentGesture}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
         </motion.div>
       )}
     </div>

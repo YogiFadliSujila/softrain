@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Users, Lock, ChevronRight, Zap, MessageSquare, Trophy } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { JoinRoomCard } from "@/components/join-room-card";
 
 interface Scenario {
   id: string;
@@ -86,11 +87,16 @@ async function getRoleplayrollData() {
   const practice = scenariosWithStatus.filter(s => s.type === "practice");
   const challenge = scenariosWithStatus.filter(s => s.type === "challenge");
 
-  return { practice, challenge, userLevel, currentEnergy };
+  // For multiplayer, get all accessible scenarios
+  const allScenarios = scenariosWithStatus
+    .filter(s => s.accessible)
+    .map(s => ({ id: s.id, title: s.title }));
+
+  return { practice, challenge, userLevel, currentEnergy, allScenarios };
 }
 
 export default async function RoleplayrollPage() {
-  const { practice, challenge, userLevel, currentEnergy } = await getRoleplayrollData();
+  const { practice, challenge, userLevel, currentEnergy, allScenarios } = await getRoleplayrollData();
 
   return (
     <div className="space-y-6 pb-20 md:pb-0">
@@ -121,14 +127,18 @@ export default async function RoleplayrollPage() {
         <CardContent className="pt-6">
           <p className="text-muted-foreground">
             Latih kemampuan komunikasi Anda dalam berbagai situasi nyata. 
-            Berinteraksi dengan AI yang memerankan berbagai karakter profesional.
+            Berinteraksi dengan AI atau bersama teman dalam mode multiplayer.
           </p>
           <div className="flex gap-2 mt-4 text-sm">
             <span className="px-2 py-1 rounded-full bg-indigo-500/10 text-indigo-600">Role Playing</span>
             <span className="px-2 py-1 rounded-full bg-blue-500/10 text-blue-600">Komunikasi</span>
+            <span className="px-2 py-1 rounded-full bg-purple-500/10 text-purple-600">Multiplayer</span>
           </div>
         </CardContent>
       </Card>
+
+      {/* Multiplayer Section */}
+      <JoinRoomCard scenarios={allScenarios} />
 
       {/* Practice */}
       <div>

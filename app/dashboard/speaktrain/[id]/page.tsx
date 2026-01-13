@@ -5,13 +5,14 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { 
   Mic, MicOff, ArrowLeft, Zap, Loader2, AlertTriangle, 
-  Trophy, Play, Square, Clock, RotateCcw, CheckCircle, Volume2, Camera
+  Trophy, Play, Square, Clock, RotateCcw, CheckCircle, Volume2, Camera, ChevronDown
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AudioAnalyzer, VoiceAnalysisResult, VoiceMetrics } from "@/lib/audio-analyzer";
 import { WebcamFeedback } from "@/components/webcam-feedback";
-import { FaceAnalysisResult } from "@/lib/face-analyzer";
+import { RealtimeFeedback } from "@/components/realtime-feedback";
+import { FaceAnalysisResult, FaceMetrics } from "@/lib/face-analyzer";
 
 interface Challenge {
   id: string;
@@ -86,9 +87,11 @@ export default function SpeaktrainDetailPage({
   const voiceResultRef = useRef<VoiceAnalysisResult | null>(null);
   
   // Face analysis (optional webcam)
+  const [faceMetrics, setFaceMetrics] = useState<FaceMetrics | null>(null);
   const faceResultRef = useRef<FaceAnalysisResult | null>(null);
   
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -474,103 +477,131 @@ export default function SpeaktrainDetailPage({
   if (phase === "recording") {
     const targetDuration = challenge.content.duration_seconds;
     const isOvertime = recordingTime > targetDuration;
+    const progress = Math.min((recordingTime / targetDuration) * 100, 100);
 
     return (
       <div className="max-w-2xl mx-auto space-y-6 pb-20 md:pb-0">
-        {/* Header */}
-        <div className="text-center">
-          <h1 className="text-xl font-bold mb-2">{challenge.content.topic}</h1>
+        {/* Topic Header */}
+        <div className="text-center space-y-1">
+          <p className="text-sm text-muted-foreground uppercase tracking-wide">Topik</p>
+          <h1 className="text-2xl font-bold">{challenge.content.topic}</h1>
           {randomTopic && (
-            <p className="text-muted-foreground italic">&quot;{randomTopic}&quot;</p>
+            <p className="text-lg text-primary font-medium">&quot;{randomTopic}&quot;</p>
           )}
         </div>
 
-        {/* Timer */}
-        <div className="text-center">
-          <div className={`text-6xl font-mono font-bold ${
+        {/* Main Timer - Large & Central */}
+        <div className="text-center py-6">
+          <div className={`text-7xl md:text-8xl font-mono font-bold tracking-tight ${
             isOvertime ? "text-red-500" : recordingTime >= targetDuration * 0.8 ? "text-yellow-500" : "text-green-500"
           }`}>
             {formatTime(recordingTime)}
           </div>
-          <p className="text-muted-foreground">
-            Target: {formatTime(targetDuration)}
-          </p>
-        </div>
-
-        {/* Recording indicator with volume meter */}
-        <div className="flex flex-col items-center gap-4">
-          <motion.div
-            animate={{ scale: isVoiceActive ? [1, 1.1, 1] : 1 }}
-            transition={{ duration: 0.3, repeat: isVoiceActive ? Infinity : 0 }}
-            className="w-20 h-20 rounded-full bg-red-500 flex items-center justify-center"
-          >
-            <Mic className="h-10 w-10 text-white" />
-          </motion.div>
-          
-          {/* Volume Meter - NEW */}
-          <div className="w-full max-w-xs">
-            <div className="flex items-center gap-2 mb-1">
-              <Volume2 className="h-4 w-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground">Volume</span>
-              <span className="text-xs ml-auto">{currentVolume}%</span>
-            </div>
-            <div className="h-3 bg-muted rounded-full overflow-hidden">
-              <motion.div 
-                className={`h-full ${getVolumeColor(currentVolume)} transition-colors`}
-                animate={{ width: `${currentVolume}%` }}
-                transition={{ duration: 0.1 }}
-              />
-            </div>
-            <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-              <span>Pelan</span>
-              <span>Ideal</span>
-              <span>Keras</span>
-            </div>
+          <div className="mt-2 flex items-center justify-center gap-2 text-muted-foreground">
+            <Clock className="h-4 w-4" />
+            <span>Target: {formatTime(targetDuration)}</span>
+          </div>
+          {/* Progress bar */}
+          <div className="mt-4 h-2 bg-muted rounded-full overflow-hidden max-w-xs mx-auto">
+            <motion.div 
+              className={`h-full ${isOvertime ? "bg-red-500" : "bg-primary"}`}
+              animate={{ width: `${progress}%` }}
+              transition={{ duration: 0.3 }}
+            />
           </div>
         </div>
 
-        {/* Webcam Feedback - Optional Face Analysis */}
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Camera className="h-4 w-4 text-purple-500" />
-              <span className="text-sm font-medium">Analisis Ekspresi (Opsional)</span>
+        {/* Recording Indicator + Volume - Integrated */}
+        <div className="flex items-center justify-center gap-6">
+          <motion.div
+            animate={{ scale: isVoiceActive ? [1, 1.15, 1] : 1 }}
+            transition={{ duration: 0.4, repeat: isVoiceActive ? Infinity : 0 }}
+            className="relative"
+          >
+            <div className="w-20 h-20 rounded-full bg-red-500 flex items-center justify-center shadow-lg">
+              <Mic className="h-10 w-10 text-white" />
             </div>
+            {isVoiceActive && (
+              <motion.div 
+                className="absolute inset-0 rounded-full border-4 border-red-400"
+                animate={{ scale: [1, 1.3], opacity: [0.8, 0] }}
+                transition={{ duration: 1, repeat: Infinity }}
+              />
+            )}
+          </motion.div>
+
+          {/* Volume Meter - Vertical Style */}
+          <div className="flex flex-col items-center gap-1">
+            <div className="h-20 w-4 bg-muted rounded-full overflow-hidden relative">
+              <motion.div 
+                className={`absolute bottom-0 w-full ${getVolumeColor(currentVolume)} rounded-full`}
+                animate={{ height: `${currentVolume}%` }}
+                transition={{ duration: 0.1 }}
+              />
+            </div>
+            <span className="text-xs text-muted-foreground">{currentVolume}%</span>
+          </div>
+        </div>
+
+        {/* Real-time Coaching Tips - Prominent */}
+        <div className="min-h-[56px]">
+          <RealtimeFeedback 
+            voiceMetrics={{ currentVolume, isActive: isVoiceActive }}
+            faceMetrics={faceMetrics}
+            recordingTime={recordingTime}
+          />
+        </div>
+
+        {/* Collapsible AI Analysis Panel */}
+        <details className="group">
+          <summary className="flex items-center justify-between p-4 bg-muted/50 rounded-lg cursor-pointer hover:bg-muted transition-colors">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center">
+                <Camera className="h-4 w-4 text-purple-500" />
+              </div>
+              <div>
+                <p className="font-medium text-sm">Analisis AI (Opsional)</p>
+                <p className="text-xs text-muted-foreground">Ekspresi wajah & gestur tangan</p>
+              </div>
+            </div>
+            <ChevronDown className="h-5 w-5 text-muted-foreground transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="mt-3 p-4 border rounded-lg">
             <WebcamFeedback 
               isActive={isRecording}
               onResult={(result) => {
                 faceResultRef.current = result;
               }}
+              onMetricsUpdate={(metrics) => {
+                setFaceMetrics(metrics);
+              }}
             />
-          </CardContent>
-        </Card>
+          </div>
+        </details>
 
-        {/* Live transcript */}
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex justify-between text-sm text-muted-foreground mb-2">
-              <span>Transkripsi Real-time</span>
-              <span>{wordCount} kata</span>
-            </div>
-            <div className="min-h-[100px] p-3 rounded-lg bg-muted text-sm">
-              {transcript || <span className="text-muted-foreground italic">Mulai berbicara...</span>}
-            </div>
-          </CardContent>
-        </Card>
+        {/* Live Transcript - Simplified */}
+        <div className="space-y-2">
+          <div className="flex justify-between items-center">
+            <span className="text-sm font-medium">Transkripsi</span>
+            <span className="text-sm text-muted-foreground">{wordCount} kata</span>
+          </div>
+          <div className="min-h-[80px] p-4 rounded-lg bg-muted/50 text-sm leading-relaxed">
+            {transcript || <span className="text-muted-foreground italic">Mulai berbicara...</span>}
+          </div>
+        </div>
 
-        {/* Stop button */}
+        {/* Stop Button - Large & Clear */}
         <Button 
           onClick={stopRecording} 
           variant="destructive" 
-          className="w-full"
-          size="lg"
+          className="w-full h-14 text-lg font-semibold shadow-lg"
           disabled={submitting}
         >
           {submitting ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
+            <Loader2 className="h-6 w-6 animate-spin" />
           ) : (
             <>
-              <Square className="h-5 w-5 mr-2" />
+              <Square className="h-6 w-6 mr-3" />
               Selesai Berbicara
             </>
           )}
