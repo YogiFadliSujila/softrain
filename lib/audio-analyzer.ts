@@ -27,7 +27,7 @@ export class AudioAnalyzer {
   private analyser: AnalyserNode | null = null;
   private mediaStream: MediaStream | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
-  private dataArray: Uint8Array | null = null;
+  private dataArray: Uint8Array<ArrayBuffer> | null = null;
   
   // Tracking data
   private volumeSamples: number[] = [];
