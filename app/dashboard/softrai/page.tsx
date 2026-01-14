@@ -28,6 +28,7 @@ export default function SoftrAIPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [loadingSession, setLoadingSession] = useState(false);
+  const [isNewSession, setIsNewSession] = useState(false); // Flag to prevent auto-load
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const supabase = createClient();
 
@@ -50,12 +51,12 @@ export default function SoftrAIPage() {
 
     if (data) {
       setSessions(data);
-      // Auto-load most recent session if no current session
-      if (data.length > 0 && !currentSessionId) {
+      // Auto-load most recent session only if not explicitly creating new session
+      if (data.length > 0 && !currentSessionId && !isNewSession) {
         loadSession(data[0].id);
       }
     }
-  }, [supabase, currentSessionId]);
+  }, [supabase, currentSessionId, isNewSession]);
 
   useEffect(() => {
     loadSessions();
@@ -69,6 +70,7 @@ export default function SoftrAIPage() {
   const loadSession = async (sessionId: string) => {
     setLoadingSession(true);
     setCurrentSessionId(sessionId);
+    setIsNewSession(false); // Reset flag when loading existing session
     
     const { data, error } = await supabase
       .from("chat_messages")
@@ -96,6 +98,7 @@ export default function SoftrAIPage() {
     // Clear current state - session will be created on first message
     setCurrentSessionId(null);
     setMessages([]);
+    setIsNewSession(true); // Prevent auto-load of old sessions
   };
 
   const sendMessage = async (e: React.FormEvent) => {
@@ -130,6 +133,7 @@ export default function SoftrAIPage() {
       // Update session ID if returned (for new sessions)
       if (data.sessionId && data.sessionId !== currentSessionId) {
         setCurrentSessionId(data.sessionId);
+        setIsNewSession(false); // Session created, allow normal behavior
         // Reload sessions list to show new session
         loadSessions();
       }

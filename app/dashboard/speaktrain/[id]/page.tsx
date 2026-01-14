@@ -81,7 +81,11 @@ export default function SpeaktrainDetailPage({
   const [wordCount, setWordCount] = useState(0);
   const [recordingTime, setRecordingTime] = useState(0);
   const [speechSupported, setSpeechSupported] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
   const [randomTopic, setRandomTopic] = useState<string | null>(null);
+  
+  // Track accumulated transcript to prevent loss during restarts
+  const accumulatedTranscriptRef = useRef<string>("");
   
   // Voice analysis
   const [currentVolume, setCurrentVolume] = useState(0);
@@ -102,12 +106,18 @@ export default function SpeaktrainDetailPage({
   }, [params]);
 
   useEffect(() => {
-    // Check for Web Speech API support
+    // Check for Web Speech API support and mobile detection
     if (typeof window !== "undefined") {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRecognition) {
         setSpeechSupported(false);
       }
+      
+      // Detect mobile devices
+      const userAgent = navigator.userAgent.toLowerCase();
+      const mobileKeywords = ['android', 'iphone', 'ipad', 'ipod', 'mobile', 'webos', 'blackberry'];
+      const isMobileDevice = mobileKeywords.some(keyword => userAgent.includes(keyword));
+      setIsMobile(isMobileDevice);
     }
   }, []);
 
@@ -156,6 +166,9 @@ export default function SpeaktrainDetailPage({
       return;
     }
 
+    // Reset accumulated transcript
+    accumulatedTranscriptRef.current = "";
+
     // Start audio analyzer for voice analysis
     audioAnalyzerRef.current = new AudioAnalyzer();
     const audioStarted = await audioAnalyzerRef.current.start(handleVoiceMetrics);
@@ -164,44 +177,73 @@ export default function SpeaktrainDetailPage({
       console.warn("Audio analyzer failed to start - continuing without voice analysis");
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.lang = "id-ID";
-    recognition.continuous = true;
-    recognition.interimResults = true;
+    // Create and configure recognition
+    const createRecognition = () => {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "id-ID";
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+      return recognition;
+    };
 
-    let finalTranscript = "";
+    const recognition = createRecognition();
 
     recognition.onresult = (event) => {
       let interimTranscript = "";
+      
+      // Process all results from this event
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript + " ";
+        const result = event.results[i];
+        const transcriptText = result[0].transcript;
+        
+        if (result.isFinal) {
+          // Add to accumulated transcript immediately
+          accumulatedTranscriptRef.current += transcriptText + " ";
         } else {
-          interimTranscript += transcript;
+          interimTranscript += transcriptText;
         }
       }
-      const full = finalTranscript + interimTranscript;
-      setTranscript(full);
-      setWordCount(full.trim().split(/\s+/).filter(w => w.length > 0).length);
+      
+      // Combine accumulated final + current interim
+      const fullTranscript = accumulatedTranscriptRef.current + interimTranscript;
+      setTranscript(fullTranscript);
+      setWordCount(fullTranscript.trim().split(/\s+/).filter(w => w.length > 0).length);
     };
 
     recognition.onerror = (event) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const errorEvent = event as any;
       console.error("Speech recognition error:", errorEvent.error);
+      
+      // Handle specific errors
       if (errorEvent.error === "not-allowed") {
         setError("Akses mikrofon ditolak. Harap izinkan akses mikrofon.");
+      } else if (errorEvent.error === "no-speech") {
+        // No speech detected - this is normal, will auto-restart
+        console.log("No speech detected, continuing...");
+      } else if (errorEvent.error === "network") {
+        setError("Masalah jaringan. Pastikan koneksi internet stabil.");
+      } else if (errorEvent.error === "aborted") {
+        // User stopped - don't restart
+        return;
       }
     };
 
     recognition.onend = () => {
-      // Restart if still recording (continuous mode workaround)
-      if (isRecording && recognitionRef.current) {
+      // Immediately restart if still recording to minimize gap
+      if (recognitionRef.current) {
         try {
-          recognitionRef.current.start();
-        } catch {
-          // Ignore if already started
+          // Create fresh instance for better stability
+          const newRecognition = createRecognition();
+          newRecognition.onresult = recognition.onresult;
+          newRecognition.onerror = recognition.onerror;
+          newRecognition.onend = recognition.onend;
+          
+          recognitionRef.current = newRecognition;
+          newRecognition.start();
+        } catch (e) {
+          console.error("Failed to restart recognition:", e);
         }
       }
     };
@@ -215,7 +257,7 @@ export default function SpeaktrainDetailPage({
     timerRef.current = setInterval(() => {
       setRecordingTime(t => t + 1);
     }, 1000);
-  }, [challenge, isRecording, handleVoiceMetrics]);
+  }, [challenge, handleVoiceMetrics]);
 
   const stopRecording = useCallback(async () => {
     if (recognitionRef.current) {
@@ -284,6 +326,7 @@ export default function SpeaktrainDetailPage({
     setError(null);
     setCurrentVolume(0);
     voiceResultRef.current = null;
+    accumulatedTranscriptRef.current = "";
     if (challenge?.content.random_topics) {
       const topics = challenge.content.random_topics;
       setRandomTopic(topics[Math.floor(Math.random() * topics.length)]);
@@ -705,6 +748,19 @@ export default function SpeaktrainDetailPage({
             </p>
           </CardContent>
         </Card>
+      )}
+
+      {/* Mobile Warning */}
+      {isMobile && (
+        <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-700 dark:text-yellow-400 text-sm">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-5 w-5 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium">Peringatan Perangkat Mobile</p>
+              <p className="mt-1">Web Speech API memiliki dukungan terbatas di perangkat mobile. Untuk hasil terbaik, gunakan Chrome di desktop/laptop.</p>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Error */}

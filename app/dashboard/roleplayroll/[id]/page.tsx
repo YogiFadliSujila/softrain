@@ -100,6 +100,8 @@ export default function RoleplayrollDetailPage({
   const faceResultRef = useRef<FaceAnalysisResult | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
+  const accumulatedTranscriptRef = useRef<string>("");
+  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
     params.then(p => setScenarioId(p.id));
@@ -138,37 +140,25 @@ export default function RoleplayrollDetailPage({
   useEffect(() => {
     if (typeof window !== "undefined") {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        recognitionRef.current = new SpeechRecognition();
-        recognitionRef.current.continuous = true;
-        recognitionRef.current.interimResults = true;
-        recognitionRef.current.lang = "id-ID";
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        recognitionRef.current.onresult = (event: any) => {
-          let finalTranscript = "";
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const t = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              finalTranscript += t + " ";
-            }
-          }
-          if (finalTranscript) {
-            setTranscript(prev => prev + finalTranscript);
-          }
-        };
-
-        recognitionRef.current.onerror = () => {
-          // Silent error handling
-        };
-      } else {
+      
+      // Detect mobile devices
+      const userAgent = navigator.userAgent.toLowerCase();
+      const mobileKeywords = ['android', 'iphone', 'ipad', 'ipod', 'mobile', 'webos', 'blackberry'];
+      const isMobileDevice = mobileKeywords.some(keyword => userAgent.includes(keyword));
+      setIsMobile(isMobileDevice);
+      
+      if (!SpeechRecognition) {
         setSpeechSupported(false);
       }
     }
 
     return () => {
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        try {
+          recognitionRef.current.stop();
+        } catch {
+          // Already stopped
+        }
       }
     };
   }, []);
@@ -210,11 +200,70 @@ export default function RoleplayrollDetailPage({
   const startRecording = async () => {
     setIsRecording(true);
     setTranscript("");
+    accumulatedTranscriptRef.current = "";
 
-    // Start speech recognition
-    if (recognitionRef.current) {
+    // Start speech recognition with improved handling
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const createRecognition = () => {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = "id-ID";
+        recognition.maxAlternatives = 1;
+        return recognition;
+      };
+
+      const recognition = createRecognition();
+      
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      recognition.onresult = (event: any) => {
+        let interimTranscript = "";
+        
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          const transcriptText = result[0].transcript;
+          
+          if (result.isFinal) {
+            accumulatedTranscriptRef.current += transcriptText + " ";
+          } else {
+            interimTranscript += transcriptText;
+          }
+        }
+        
+        const fullTranscript = accumulatedTranscriptRef.current + interimTranscript;
+        setTranscript(fullTranscript);
+      };
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      recognition.onerror = (event: any) => {
+        console.error("Speech recognition error:", event.error);
+        // Don't show error for common non-critical issues
+        if (event.error === "no-speech" || event.error === "aborted") {
+          return;
+        }
+      };
+
+      recognition.onend = () => {
+        // Restart if still recording
+        if (recognitionRef.current) {
+          try {
+            const newRecognition = createRecognition();
+            newRecognition.onresult = recognition.onresult;
+            newRecognition.onerror = recognition.onerror;
+            newRecognition.onend = recognition.onend;
+            
+            recognitionRef.current = newRecognition;
+            newRecognition.start();
+          } catch (e) {
+            console.error("Failed to restart recognition:", e);
+          }
+        }
+      };
+
+      recognitionRef.current = recognition;
       try {
-        recognitionRef.current.start();
+        recognition.start();
       } catch {
         // Already started
       }
@@ -228,7 +277,13 @@ export default function RoleplayrollDetailPage({
   const stopRecording = async () => {
     // Stop speech recognition
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try {
+        const ref = recognitionRef.current;
+        recognitionRef.current = null; // Prevent restart
+        ref.stop();
+      } catch {
+        // Already stopped
+      }
     }
 
     // Stop audio analyzer
@@ -239,10 +294,15 @@ export default function RoleplayrollDetailPage({
 
     setIsRecording(false);
 
+    // Use accumulated transcript for final message
+    const finalTranscript = accumulatedTranscriptRef.current.trim() || transcript.trim();
+    
     // Send message if we have transcript
-    if (transcript.trim()) {
-      await sendVoiceMessage(transcript.trim());
+    if (finalTranscript) {
+      await sendVoiceMessage(finalTranscript);
     }
+    
+    accumulatedTranscriptRef.current = "";
   };
 
   const sendVoiceMessage = async (content: string) => {
@@ -542,7 +602,14 @@ export default function RoleplayrollDetailPage({
                   <div className="p-3 bg-yellow-500/10 rounded-lg text-sm text-yellow-700">
                     Browser tidak mendukung Speech Recognition
                   </div>
-                ) : !mustComplete && (
+                ) : isMobile ? (
+                  <div className="p-3 bg-yellow-500/10 rounded-lg text-sm text-yellow-700">
+                    <p className="font-medium">⚠️ Peringatan Mobile</p>
+                    <p className="mt-1">Web Speech API memiliki dukungan terbatas di perangkat mobile.</p>
+                  </div>
+                ) : null}
+                
+                {!mustComplete && (
                   <Button
                     onClick={isRecording ? stopRecording : startRecording}
                     variant={isRecording ? "destructive" : "default"}
