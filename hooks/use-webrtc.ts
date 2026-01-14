@@ -33,7 +33,7 @@ export function useWebRTC({ roomCode, userId, isHost }: WebRTCConfig) {
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const channelRef = useRef<ReturnType<typeof createClient>["channel"] | null>(null);
+  const channelRef = useRef<ReturnType<ReturnType<typeof createClient>["channel"]> | null>(null);
 
   // Initialize media
   const startMedia = useCallback(async () => {
