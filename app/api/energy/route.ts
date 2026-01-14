@@ -28,12 +28,14 @@ export async function GET() {
       return NextResponse.json({ energy: newEnergy });
     }
 
-    // Check if daily reset is needed (reset every 24 hours)
+    // Check if daily reset is needed (reset at 00:00 midnight)
     const lastReset = new Date(energy.last_daily_reset);
     const now = new Date();
-    const hoursSinceReset = (now.getTime() - lastReset.getTime()) / (1000 * 60 * 60);
+    
+    // Check if it's a different day (compare YYYY-MM-DD)
+    const isDifferentDay = lastReset.toDateString() !== now.toDateString();
 
-    if (hoursSinceReset >= 24) {
+    if (isDifferentDay) {
       // Reset energy to 5 and ads watched to 0
       const { data: resetEnergy } = await supabase
         .from("user_energies")

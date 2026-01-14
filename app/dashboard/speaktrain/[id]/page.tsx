@@ -13,6 +13,7 @@ import { AudioAnalyzer, VoiceAnalysisResult, VoiceMetrics } from "@/lib/audio-an
 import { WebcamFeedback } from "@/components/webcam-feedback";
 import { RealtimeFeedback } from "@/components/realtime-feedback";
 import { FaceAnalysisResult, FaceMetrics } from "@/lib/face-analyzer";
+import { useEnergyGuard } from "@/components/energy-guard";
 
 // Import global SpeechRecognition types
 import "@/types/speech-recognition";
@@ -97,6 +98,8 @@ export default function SpeaktrainDetailPage({
   const [faceMetrics, setFaceMetrics] = useState<FaceMetrics | null>(null);
   const faceResultRef = useRef<FaceAnalysisResult | null>(null);
   
+  const { checkEnergy, EnergyModal } = useEnergyGuard();
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -160,6 +163,10 @@ export default function SpeaktrainDetailPage({
   const startRecording = useCallback(async () => {
     if (!challenge) return;
     
+    // Check energy cost
+    const hasEnergy = await checkEnergy(challenge.energy_cost);
+    if (!hasEnergy) return;
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setError("Browser tidak mendukung Web Speech API");
@@ -308,6 +315,8 @@ export default function SpeaktrainDetailPage({
       } else {
         setResult(data);
         setPhase("result");
+        // Update energy balance (deducted on submission)
+        window.dispatchEvent(new Event("energy-updated"));
       }
     } catch {
       setError("Gagal mengirim hasil");
@@ -775,6 +784,8 @@ export default function SpeaktrainDetailPage({
         <Play className="h-5 w-5 mr-2" />
         Mulai Berbicara
       </Button>
+      {/* Energy Modal */}
+      <EnergyModal />
     </div>
   );
 }

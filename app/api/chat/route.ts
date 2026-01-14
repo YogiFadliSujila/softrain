@@ -31,6 +31,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
     }
 
+    // Check Energy Logic
+    const { data: energy } = await supabase
+      .from("user_energies")
+      .select("current_energy")
+      .eq("user_id", user.id)
+      .single();
+
+    const { data: subscription } = await supabase
+      .from("subscriptions")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("payment_status", "paid")
+      .gte("ends_at", new Date().toISOString())
+      .single();
+
+    const isPremium = !!subscription;
+    const energyCost = 1;
+
+    if (!isPremium && (!energy || energy.current_energy < energyCost)) {
+      return NextResponse.json({ 
+        error: "Not enough energy",
+        response: "Maaf, energi Anda habis. Silakan upgrade ke Premium untuk lanjut chatting."
+      }, { status: 200 }); // Return 200 to show message in chat interface check not error
+    }
+
+    // Deduct energy if not premium
+    if (!isPremium) {
+      await supabase
+        .from("user_energies")
+        .update({ current_energy: energy!.current_energy - energyCost })
+        .eq("user_id", user.id);
+    }
+
     // Check if API key exists
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) {

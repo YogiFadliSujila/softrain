@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEnergyGuard } from "@/components/energy-guard";
 
 interface Question {
   id: number;
@@ -106,8 +107,17 @@ export default function JournAllistDetailPage({
     };
   }, [articleId]);
 
-  const handleStartQuiz = () => {
-    setPhase("quiz");
+  // Energy Guard
+  const { checkEnergy, EnergyModal } = useEnergyGuard();
+
+  const handleStartQuiz = async () => {
+    if (!article) return;
+    
+    // Check energy before starting quiz
+    const canProceed = await checkEnergy(article.energy_cost);
+    if (canProceed) {
+      setPhase("quiz");
+    }
   };
 
   const handleSelectAnswer = (questionId: number, optionId: string) => {
@@ -151,6 +161,8 @@ export default function JournAllistDetailPage({
       } else {
         setResult(data);
         setPhase("result");
+        // Update energy balance (deducted on server)
+        window.dispatchEvent(new Event("energy-updated"));
       }
     } catch {
       setError("Gagal mengirim jawaban");
@@ -425,6 +437,7 @@ export default function JournAllistDetailPage({
           <ChevronRight className="h-4 w-4 ml-1" />
         </Button>
       </div>
+      <EnergyModal />
     </div>
   );
 }

@@ -14,6 +14,7 @@ import { AudioAnalyzer, VoiceAnalysisResult } from "@/lib/audio-analyzer";
 import { WebcamFeedback } from "@/components/webcam-feedback";
 import { RealtimeFeedback } from "@/components/realtime-feedback";
 import { FaceAnalysisResult, FaceMetrics } from "@/lib/face-analyzer";
+import { useEnergyGuard } from "@/components/energy-guard";
 
 // Import global SpeechRecognition types
 import "@/types/speech-recognition";
@@ -102,6 +103,7 @@ export default function RoleplayrollDetailPage({
   const recognitionRef = useRef<any>(null);
   const accumulatedTranscriptRef = useRef<string>("");
   const [isMobile, setIsMobile] = useState(false);
+  const { checkEnergy, EnergyModal } = useEnergyGuard();
 
   useEffect(() => {
     params.then(p => setScenarioId(p.id));
@@ -170,7 +172,11 @@ export default function RoleplayrollDetailPage({
   }, []);
 
   const startConversation = async () => {
-    if (!scenarioId) return;
+    if (!scenarioId || !scenario) return;
+
+    // Check energy
+    const hasEnergy = await checkEnergy(scenario.energy_cost);
+    if (!hasEnergy) return;
     
     setLoading(true);
     try {
@@ -370,6 +376,8 @@ export default function RoleplayrollDetailPage({
       if (data.success) {
         setResult(data);
         setPhase("result");
+        // Update energy balance (deducted on completion)
+        window.dispatchEvent(new Event("energy-updated"));
       } else {
         setError(data.error || "Gagal menyelesaikan sesi");
       }
@@ -808,6 +816,8 @@ export default function RoleplayrollDetailPage({
           </>
         )}
       </Button>
+      {/* Energy Modal */}
+      <EnergyModal />
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEnergyGuard } from "@/components/energy-guard";
 
 interface Option {
   id: string;
@@ -88,8 +89,15 @@ export default function EthicquizDetailPage({
     fetchChallenge();
   }, [challengeId]);
 
+  // Energy Guard
+  const { checkEnergy, EnergyModal } = useEnergyGuard();
+
   const handleSubmit = async () => {
-    if (!selectedOption || !challengeId) return;
+    if (!selectedOption || !challengeId || !challenge) return;
+    
+    // Check energy before submitting (cost is deducted on server)
+    const canProceed = await checkEnergy(challenge.energy_cost);
+    if (!canProceed) return;
     
     setSubmitting(true);
     setError(null);
@@ -110,6 +118,8 @@ export default function EthicquizDetailPage({
         setError(data.error);
       } else {
         setResult(data);
+        // Update energy balance (deducted on server)
+        window.dispatchEvent(new Event("energy-updated"));
       }
     } catch {
       setError("Gagal mengirim jawaban");
@@ -364,6 +374,7 @@ export default function EthicquizDetailPage({
           </>
         )}
       </Button>
+      <EnergyModal />
     </div>
   );
 }

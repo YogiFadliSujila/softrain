@@ -7,6 +7,7 @@ import { Bot, Send, Loader2, Plus, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEnergyGuard } from "@/components/energy-guard";
 
 interface Message {
   id: string;
@@ -31,6 +32,7 @@ export default function SoftrAIPage() {
   const [isNewSession, setIsNewSession] = useState(false); // Flag to prevent auto-load
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const supabase = createClient();
+  const { checkEnergy, EnergyModal } = useEnergyGuard();
 
   // Load sessions on mount
   const loadSessions = useCallback(async () => {
@@ -105,6 +107,10 @@ export default function SoftrAIPage() {
     e.preventDefault();
     if (!input.trim() || loading) return;
 
+    // Check energy (Cost: 1 per message)
+    const hasEnergy = await checkEnergy(1);
+    if (!hasEnergy) return;
+
     const userMessage = input.trim();
     setInput("");
     
@@ -144,6 +150,9 @@ export default function SoftrAIPage() {
         role: "assistant",
         content: data.response || "Maaf, terjadi kesalahan.",
       }]);
+      
+      // Update energy balance in real-time
+      window.dispatchEvent(new Event("energy-updated"));
 
     } catch (err) {
       console.error("Send message error:", err);
@@ -291,6 +300,9 @@ export default function SoftrAIPage() {
           </form>
         </div>
       </Card>
+      
+      {/* Energy Modal */}
+      <EnergyModal />
     </div>
   );
 }
