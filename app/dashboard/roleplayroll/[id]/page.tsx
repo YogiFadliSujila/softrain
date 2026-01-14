@@ -15,43 +15,8 @@ import { WebcamFeedback } from "@/components/webcam-feedback";
 import { RealtimeFeedback } from "@/components/realtime-feedback";
 import { FaceAnalysisResult, FaceMetrics } from "@/lib/face-analyzer";
 
-// Speech Recognition type declaration
-interface SpeechRecognitionEvent extends Event {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionResultList {
-  length: number;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  isFinal: boolean;
-  [index: number]: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-interface SpeechRecognitionInstance extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: ((event: Event) => void) | null;
-}
-
-declare global {
-  interface Window {
-    SpeechRecognition: new () => SpeechRecognitionInstance;
-    webkitSpeechRecognition: new () => SpeechRecognitionInstance;
-  }
-}
+// Import global SpeechRecognition types
+import "@/types/speech-recognition";
 
 interface Message {
   role: "user" | "ai";
@@ -179,7 +144,8 @@ export default function RoleplayrollDetailPage({
         recognitionRef.current.interimResults = true;
         recognitionRef.current.lang = "id-ID";
 
-        recognitionRef.current.onresult = (event: SpeechRecognitionEvent) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        recognitionRef.current.onresult = (event: any) => {
           let finalTranscript = "";
           for (let i = event.resultIndex; i < event.results.length; i++) {
             const t = event.results[i][0].transcript;
