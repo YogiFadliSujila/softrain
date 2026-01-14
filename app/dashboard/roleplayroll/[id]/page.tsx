@@ -208,8 +208,8 @@ export default function RoleplayrollDetailPage({
   }, []);
 
   // Volume update callback
-  const handleVolumeUpdate = useCallback((metrics: { volume: number; isActive: boolean }) => {
-    setCurrentVolume(metrics.volume);
+  const handleVolumeUpdate = useCallback((metrics: { currentVolume: number; isActive: boolean }) => {
+    setCurrentVolume(metrics.currentVolume);
     setIsVoiceActive(metrics.isActive);
   }, []);
 
